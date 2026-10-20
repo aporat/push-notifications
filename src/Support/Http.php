@@ -24,7 +24,7 @@ final class Http
     public const int DEFAULT_CONNECT_TIMEOUT = 10;
 
     /**
-     * @param  array{timeout?: int|float, connect_timeout?: int|float, proxy?: string|array<string, mixed>}  $options
+     * @param  array{timeout?: int|float, connect_timeout?: int|float, proxy?: string|array{http?: string|null, https?: string|null, no?: array<string>|string|null}}  $options
      *
      * @throws ConfigurationException
      */

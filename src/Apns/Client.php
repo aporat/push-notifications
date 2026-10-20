@@ -15,7 +15,7 @@ use Aporat\PushNotifications\Platform;
 use Aporat\PushNotifications\Response;
 use Aporat\PushNotifications\Support\Http;
 use GuzzleHttp\ClientInterface;
-use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Exception\BadResponseException;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\EachPromise;
 use GuzzleHttp\Promise\PromiseInterface;
@@ -41,7 +41,7 @@ use Throwable;
  *     port?: int,
  *     timeout?: int|float,
  *     connect_timeout?: int|float,
- *     proxy?: string|array<string, mixed>,
+ *     proxy?: string|array{http?: string|null, https?: string|null, no?: array<string>|string|null},
  *     concurrency?: int,
  *     token_refresh_after?: int,
  * }
@@ -149,14 +149,18 @@ final class Client implements Sender
 
         (new EachPromise($promises, [
             'concurrency' => $this->concurrency,
-            'fulfilled' => function (Response $response, int|string $key) use (&$results): void {
-                $results[$key] = $response;
+            'fulfilled' => function (mixed $response, int|string $key) use (&$results, &$failure): void {
+                if ($response instanceof Response) {
+                    $results[$key] = $response;
+                } else {
+                    $failure ??= new PushException('A send settled without a response.');
+                }
             },
             // Without this, EachPromise drops rejections on the floor and
             // an auth or configuration failure mid-batch would surface as
             // a generic transport failure, or not at all.
-            'rejected' => function (Throwable $reason) use (&$failure): void {
-                $failure ??= $reason;
+            'rejected' => function (mixed $reason) use (&$failure): void {
+                $failure ??= $reason instanceof Throwable ? $reason : new PushException('A send was rejected without an exception.');
             },
         ]))->promise()->wait();
 
@@ -200,17 +204,21 @@ final class Client implements Sender
 
                 return $parsed;
             },
-            function (Throwable $reason) use ($message): Response {
-                if ($reason instanceof RequestException && $reason->hasResponse()) {
-                    /** @var ResponseInterface $response */
-                    $response = $reason->getResponse();
-                    $parsed = $this->parse($message, $response);
+            function (mixed $reason) use ($message): Response {
+                // With http_errors off this only happens through middleware
+                // a caller added; the answer is still Apple's or Google's.
+                if ($reason instanceof BadResponseException) {
+                    $parsed = $this->parse($message, $reason->getResponse());
                     $this->log($parsed);
 
                     return $parsed;
                 }
 
-                $failure = Response::transportFailure(Platform::Apns, $message->target(), Http::describeFailure($reason));
+                $failure = Response::transportFailure(
+                    Platform::Apns,
+                    $message->target(),
+                    $reason instanceof Throwable ? Http::describeFailure($reason) : 'The request was rejected without an exception.',
+                );
                 $this->log($failure);
 
                 return $failure;

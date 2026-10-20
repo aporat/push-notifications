@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-20
+
+### Fixed
+- Static analysis against Guzzle 8 and guzzlehttp/promises 3, which the `^8.0` constraint from 0.1.0
+  already allowed: a response carried by a rejection is read from `BadResponseException` (Guzzle 8
+  removed `RequestException::getResponse()`), promise callbacks take `mixed`, and the `proxy` option
+  is typed as Guzzle declares it. No behaviour change; the suite passes on both Guzzle majors.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed
