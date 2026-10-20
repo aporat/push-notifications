@@ -1,0 +1,10 @@
+/.idea
+/build
+/vendor
+composer.phar
+composer.lock
+.DS_Store
+.phpunit*
+.phpstan.cache
+coverage.xml
+junit.xml

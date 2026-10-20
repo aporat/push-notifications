@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint, static analysis and the coverage run, on the newest PHP.
+  qa:
+    name: Quality Assurance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: curl, json, openssl
+          ini-values: memory_limit=-1
+          tools: composer:v2
+          coverage: xdebug
+
+      - name: Install Dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Execute linter
+        run: composer check
+
+      - name: Execute static analysis
+        run: composer analyze
+
+      - name: Execute tests with coverage
+        run: composer test-ci
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ${{ github.repository }}
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ${{ github.repository }}
+
+  # The test suite on every supported PHP, with the newest and the oldest
+  # dependency set composer.json allows.
+  tests:
+    name: PHP ${{ matrix.php }}${{ matrix.dependencies == 'lowest' && ' / lowest' || '' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+        dependencies: [highest]
+        include:
+          - php: '8.4'
+            dependencies: lowest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, openssl
+          ini-values: memory_limit=-1
+          tools: composer:v2
+          coverage: none
+
+      - name: Install Dependencies (${{ matrix.dependencies }})
+        uses: ramsey/composer-install@v4
+        with:
+          dependency-versions: ${{ matrix.dependencies }}
+
+      - name: Execute tests
+        run: composer test
