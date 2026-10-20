@@ -36,17 +36,22 @@ enum ErrorCode: string
 
     /**
      * The outcome for a google.rpc.Status code when no FCM error code was given.
+     *
+     * A bare 404 says nothing about the token: a wrong project ID answers 404
+     * to every send, and treating that as "unregistered" would have a
+     * listener delete every token. FCM always attaches the UNREGISTERED
+     * error code when it means the token, so only that maps to
+     * {@see Outcome::Unregistered}.
      */
     public static function outcomeForStatus(?string $rpcStatus, int $httpStatus): Outcome
     {
         return match ($rpcStatus) {
-            'NOT_FOUND' => Outcome::Unregistered,
+            'NOT_FOUND' => Outcome::Failed,
             'INVALID_ARGUMENT' => Outcome::InvalidMessage,
             'UNAUTHENTICATED', 'PERMISSION_DENIED' => Outcome::Unauthorized,
             'RESOURCE_EXHAUSTED' => Outcome::RateLimited,
             'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED' => Outcome::Unavailable,
             default => match (true) {
-                $httpStatus === 404 => Outcome::Unregistered,
                 $httpStatus === 401, $httpStatus === 403 => Outcome::Unauthorized,
                 $httpStatus === 429 => Outcome::RateLimited,
                 $httpStatus >= 500 => Outcome::Unavailable,

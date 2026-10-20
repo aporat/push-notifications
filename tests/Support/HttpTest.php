@@ -52,4 +52,13 @@ final class HttpTest extends TestCase
         self::assertSame(5, $client->getConfig('timeout'));
         self::assertFalse($client->getConfig('http_errors'));
     }
+
+    public function test_describe_failure_strips_urls(): void
+    {
+        $e = new \RuntimeException('cURL error 28: Operation timed out (see https://curl.haxx.se/libcurl/c/libcurl-errors.html) for https://api.push.apple.com/3/device/abc');
+        self::assertSame('cURL error 28: Operation timed out', Http::describeFailure($e));
+
+        self::assertSame('Could not resolve proxy [url]', Http::describeFailure(new \RuntimeException('Could not resolve proxy http://user:pass@proxy.local:8080')));
+        self::assertSame(\RuntimeException::class, Http::describeFailure(new \RuntimeException('')));
+    }
 }

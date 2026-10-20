@@ -54,7 +54,7 @@ final class PemTest extends TestCase
     public function test_load_rejects_a_missing_file(): void
     {
         $this->expectException(ConfigurationException::class);
-        $this->expectExceptionMessage('neither PEM text nor a readable file');
+        $this->expectExceptionMessage('neither PEM text nor a readable file path');
 
         Pem::load('/nonexistent/AuthKey.p8');
     }
@@ -79,5 +79,18 @@ final class PemTest extends TestCase
         $this->expectException(ConfigurationException::class);
 
         Pem::load('   ');
+    }
+
+    public function test_load_does_not_echo_a_malformed_key(): void
+    {
+        $secret = 'MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg';
+
+        try {
+            Pem::load($secret);
+            self::fail('Expected a ConfigurationException.');
+        } catch (ConfigurationException $e) {
+            self::assertStringNotContainsString($secret, $e->getMessage());
+            self::assertStringNotContainsString(substr($secret, 0, 12), $e->getMessage());
+        }
     }
 }

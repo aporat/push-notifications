@@ -11,10 +11,12 @@ use Aporat\PushNotifications\Apns\Message;
 use Aporat\PushNotifications\Apns\Payload;
 use Aporat\PushNotifications\Apns\ProviderToken;
 use Aporat\PushNotifications\Clock\FrozenClock;
+use Aporat\PushNotifications\Exceptions\ConfigurationException;
 use Aporat\PushNotifications\Exceptions\InvalidMessageException;
 use Aporat\PushNotifications\Fcm\Message as FcmMessage;
 use Aporat\PushNotifications\Outcome;
 use Aporat\PushNotifications\Platform;
+use Aporat\PushNotifications\Response;
 use Aporat\PushNotifications\Tests\Keys;
 use Aporat\PushNotifications\Tests\MockHttp;
 use GuzzleHttp\Exception\ConnectException;
@@ -224,5 +226,58 @@ final class ClientTest extends TestCase
 
         self::assertSame(Outcome::RateLimited, $response->outcome);
         self::assertSame(30, $response->retryAfter);
+    }
+
+    public function test_send_many_throws_when_the_key_cannot_sign(): void
+    {
+        $client = new Client(new Credentials('TEAM123456', 'KEY1234567', Keys::rsa()), Environment::Sandbox, [], $this->http->client, null, null, $this->clock);
+        $this->http->queue(200);
+
+        try {
+            $client->sendMany(['a' => $this->message('aa'), 'b' => $this->message('bb')]);
+            self::fail('Expected a ConfigurationException.');
+        } catch (ConfigurationException $e) {
+            self::assertStringContainsString('not an EC key', $e->getMessage());
+            self::assertSame(0, $this->http->count());
+        }
+    }
+
+    public function test_connection_failure_message_drops_the_device_token_url(): void
+    {
+        $this->http->queueFailure(new ConnectException('cURL error 7: Failed to connect to api.push.apple.com port 443 (see https://curl.haxx.se/libcurl/c/libcurl-errors.html) for https://api.push.apple.com/3/device/'.self::TOKEN, new Request('POST', '/')));
+
+        $response = $this->client()->send($this->message());
+
+        self::assertSame('cURL error 7: Failed to connect to api.push.apple.com port 443', $response->message);
+        self::assertStringNotContainsString(self::TOKEN, (string) $response->message);
+    }
+
+    public function test_concurrent_expired_tokens_refresh_once(): void
+    {
+        // Three requests go out with token T1 and all come back expired. The
+        // first rejection mints T2; the other two see T1 is no longer current
+        // and reuse T2 instead of minting T3 and T4.
+        $token = new ProviderToken(new Credentials('TEAM123456', 'KEY1234567', Keys::ec()), $this->clock);
+        $client = new Client(new Credentials('TEAM123456', 'KEY1234567', Keys::ec()), Environment::Sandbox, [], $this->http->client, $token, null, $this->clock);
+        $messages = ['a' => $this->message('aa'), 'b' => $this->message('bb'), 'c' => $this->message('cc')];
+
+        // All three go out before any answer arrives, then each retries:
+        // a, b, c, then a', b', c'.
+        $stale = $token->get();
+        foreach ($messages as $message) {
+            $this->http->queue(403, ['reason' => 'ExpiredProviderToken']);
+        }
+        foreach ($messages as $key => $message) {
+            $this->http->queue(200, '', ['apns-id' => $key]);
+        }
+
+        $responses = $client->sendMany($messages);
+
+        self::assertSame(['a', 'b', 'c'], array_map(static fn (Response $r): ?string => $r->id, array_values($responses)));
+        self::assertSame(6, $this->http->count());
+        $authorizations = array_unique(array_map(fn (int $i): string => $this->http->request($i)->getHeaderLine('authorization'), range(0, 5)));
+        // T1 on the first request, T2 everywhere after: no third token.
+        self::assertCount(2, $authorizations);
+        self::assertSame('bearer '.$stale, $this->http->request(0)->getHeaderLine('authorization'));
     }
 }

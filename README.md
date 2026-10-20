@@ -116,7 +116,7 @@ $message = Message::liveActivity($activityToken, Payload::create()
 
 ### Provider tokens
 
-The client mints an ES256 token on first use and reuses it for 50 minutes, inside Apple's rule of refreshing no more than every 20 and no less than every 60 minutes. An `ExpiredProviderToken` answer mints a new token and retries once.
+The client mints an ES256 token on first use and reuses it for 50 minutes, inside Apple's rule of refreshing no more than every 20 and no less than every 60 minutes. An `ExpiredProviderToken` answer replaces the token and retries once; when many requests are in flight, the first rejection does the replacing and the rest reuse it, and a replacement another worker already wrote to the shared cache is adopted rather than minting one more.
 
 To share one token across every worker that uses the key, pass a PSR-6 pool:
 
@@ -209,13 +209,13 @@ Every send returns a `Response`. Nothing about the service's answer throws.
 | `Outcome` | APNs | FCM | What to do |
 |---|---|---|---|
 | `Delivered` | 200 | 200 | Nothing |
-| `Unregistered` | 410 `Unregistered`, `ExpiredToken` | `UNREGISTERED`, 404 | Delete the token |
+| `Unregistered` | 410 `Unregistered`, `ExpiredToken` | `UNREGISTERED` | Delete the token |
 | `InvalidTarget` | `BadDeviceToken`, `DeviceTokenNotForTopic` | `SENDER_ID_MISMATCH`, a `BadRequest` on the token field | Don't retry; the token is wrong for this app or environment |
 | `InvalidMessage` | `PayloadTooLarge`, `BadTopic`, `BadPriority`, … | `INVALID_ARGUMENT` | Fix the message |
 | `Unauthorized` | 403 provider-token and certificate errors, `TopicDisallowed` | `THIRD_PARTY_AUTH_ERROR`, 401/403 | Fix the credentials |
 | `RateLimited` | 429 | `QUOTA_EXCEEDED`, 429 | Retry after `retryAfter` or a backoff |
 | `Unavailable` | 5xx, `IdleTimeout`, `Shutdown`, connection failures | `UNAVAILABLE`, `INTERNAL`, 5xx, connection failures | Retry with backoff |
-| `Failed` | anything else | anything else | Look at `reason` |
+| `Failed` | anything else | anything else, including a bare 404 | Look at `reason` |
 
 `$response->succeeded()`, `->tokenIsUnregistered()` and `->isRetryable()` answer the three questions most code asks. Apple's do-not-retry list (`BadDeviceToken`, `DeviceTokenNotForTopic`, `Forbidden`, `ExpiredToken`, `Unregistered`, `PayloadTooLarge`) is never retryable.
 
@@ -234,7 +234,7 @@ foreach ($responses as $name => $response) {
 }
 ```
 
-Sends run concurrently over the one connection, up to the `concurrency` option (50 by default). Results have the same keys as the input. Every message is validated before the first one is sent, so an invalid message throws before anything leaves.
+Sends run concurrently over the one connection, up to the `concurrency` option (50 by default). Results have the same keys as the input. Every message is validated, and the provider or access token fetched, before the first one is sent, so an invalid message or a credential problem throws before anything leaves.
 
 ---
 

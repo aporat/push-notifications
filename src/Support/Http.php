@@ -10,6 +10,7 @@ use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Handler\CurlMultiHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\RequestOptions;
+use Throwable;
 
 /**
  * Builds the HTTP client both services share the shape of: HTTP/2 over a
@@ -79,6 +80,22 @@ final class Http
 
         /** @var array<string, mixed> */
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * A connection failure's message without the request URL, which for
+     * APNs carries the device token and behind a proxy may carry its
+     * credentials.
+     */
+    public static function describeFailure(Throwable $e): string
+    {
+        $message = $e->getMessage();
+        $message = preg_replace('~\\s*\\(see https?://\\S+\\)~', '', $message) ?? $message;
+        $message = preg_replace('~\\s+for https?://\\S+~', '', $message) ?? $message;
+        $message = preg_replace('~https?://\\S+~', '[url]', $message) ?? $message;
+        $message = trim($message);
+
+        return $message === '' ? $e::class : $message;
     }
 
     /**

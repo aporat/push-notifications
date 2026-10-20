@@ -30,10 +30,8 @@ final class Pem
         }
 
         if (! is_file($value) || ! is_readable($value)) {
-            throw new ConfigurationException(sprintf(
-                'The private key "%s" is neither PEM text nor a readable file.',
-                strlen($value) > 80 ? substr($value, 0, 77).'...' : $value,
-            ));
+            // The value is not echoed: it may be a key with a broken header.
+            throw new ConfigurationException('The private key is neither PEM text nor a readable file path.');
         }
 
         $contents = file_get_contents($value);

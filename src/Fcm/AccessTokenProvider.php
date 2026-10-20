@@ -69,7 +69,10 @@ final class AccessTokenProvider
     }
 
     /**
-     * Fetch a new token now. Use after Google answers 401.
+     * Replace the current token. Use after Google answers 401.
+     *
+     * Another worker sharing the cache may already have replaced it; that
+     * token is adopted rather than exchanging one more assertion.
      *
      * @throws AuthenticationException
      * @throws ConfigurationException
@@ -78,6 +81,36 @@ final class AccessTokenProvider
     {
         $now = $this->clock->now()->getTimestamp();
 
+        return $this->fromCache($now, newerThan: $this->expiresAt) ?? $this->exchange($now);
+    }
+
+    /**
+     * Replace the token only if the rejected one is still the current one,
+     * so concurrent 401s cause one exchange, not one per request.
+     *
+     * @throws AuthenticationException
+     * @throws ConfigurationException
+     */
+    public function refreshIfStale(string $rejected): string
+    {
+        if ($this->token !== null && $this->token !== $rejected) {
+            return $this->token;
+        }
+
+        return $this->refresh();
+    }
+
+    public function expiresAt(): int
+    {
+        return $this->expiresAt;
+    }
+
+    /**
+     * @throws AuthenticationException
+     * @throws ConfigurationException
+     */
+    private function exchange(int $now): string
+    {
         $assertion = Jwt::rs256(
             $this->account->privateKeyId === null ? [] : ['kid' => $this->account->privateKeyId],
             [
@@ -106,11 +139,6 @@ final class AccessTokenProvider
         $this->toCache($token, $this->expiresAt);
 
         return $token;
-    }
-
-    public function expiresAt(): int
-    {
-        return $this->expiresAt;
     }
 
     /**
@@ -149,7 +177,10 @@ final class AccessTokenProvider
         return 'fcm_access_token_'.$this->account->fingerprint();
     }
 
-    private function fromCache(int $now): ?string
+    /**
+     * A fresh token from the shared cache, expiring after $newerThan.
+     */
+    private function fromCache(int $now, int $newerThan = -1): ?string
     {
         if ($this->cache === null) {
             return null;
@@ -167,7 +198,7 @@ final class AccessTokenProvider
             return null;
         }
 
-        if (! $this->fresh($value['expires_at'], $now)) {
+        if ($value['expires_at'] <= $newerThan || ! $this->fresh($value['expires_at'], $now)) {
             return null;
         }
 

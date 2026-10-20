@@ -103,11 +103,18 @@ final class ClientTest extends TestCase
         self::assertSame(404, $response->statusCode);
     }
 
-    public function test_not_found_without_details_is_still_unregistered(): void
+    public function test_not_found_without_an_error_code_is_not_unregistered(): void
     {
-        $this->http->queue(404, $this->error(404, 'NOT_FOUND', 'gone'));
+        // A wrong project ID answers 404 to every send; only the UNREGISTERED
+        // error code may tell a listener to delete the token.
+        $this->http->queue(404, $this->error(404, 'NOT_FOUND', 'Requested entity was not found.'));
 
-        self::assertSame(Outcome::Unregistered, $this->client()->send($this->message())->outcome);
+        $response = $this->client()->send($this->message());
+
+        self::assertSame(Outcome::Failed, $response->outcome);
+        self::assertFalse($response->tokenIsUnregistered());
+        self::assertFalse($response->isRetryable());
+        self::assertSame('NOT_FOUND', $response->reason);
     }
 
     public function test_malformed_token_is_an_invalid_target(): void
@@ -232,5 +239,47 @@ final class ClientTest extends TestCase
         $this->expectExceptionMessage('cannot send a apns message');
 
         $this->client()->send(ApnsMessage::alert('ab')->bundleId('x'));
+    }
+
+    public function test_send_many_throws_when_the_token_cannot_be_fetched(): void
+    {
+        $oauth = new MockHttp;
+        $oauth->queue(400, ['error' => 'invalid_grant']);
+        $account = $this->account();
+        $client = new Client($account, [], $this->http->client, new AccessTokenProvider($account, $oauth->client, $this->clock));
+        $this->http->queue(200, ['name' => 'never']);
+
+        try {
+            $client->sendMany(['a' => $this->message('a'), 'b' => $this->message('b')]);
+            self::fail('Expected an AuthenticationException.');
+        } catch (AuthenticationException $e) {
+            self::assertStringContainsString('invalid_grant', $e->getMessage());
+            self::assertSame(0, $this->http->count());
+        }
+    }
+
+    public function test_send_many_surfaces_a_failure_during_the_batch(): void
+    {
+        // The first message meets a 401, the token exchange for the retry fails.
+        $oauth = new MockHttp;
+        $oauth->queue(200, ['access_token' => 'ya29.first', 'expires_in' => 3600]);
+        $oauth->queue(500, ['error' => 'server_error']);
+        $account = $this->account();
+        $client = new Client($account, [], $this->http->client, new AccessTokenProvider($account, $oauth->client, $this->clock));
+        $this->http->queue(401, $this->error(401, 'UNAUTHENTICATED', 'expired'));
+        $this->http->queue(200, ['name' => 'projects/demo-project/messages/b']);
+
+        $this->expectException(AuthenticationException::class);
+
+        $client->sendMany(['a' => $this->message('a'), 'b' => $this->message('b')]);
+    }
+
+    public function test_connection_failure_message_drops_the_url(): void
+    {
+        $this->http->queueFailure(new ConnectException('cURL error 28: Operation timed out after 30000 milliseconds (see https://curl.haxx.se/libcurl/c/libcurl-errors.html) for https://fcm.googleapis.com/v1/projects/demo-project/messages:send', new Request('POST', '/')));
+
+        $response = $this->client()->send($this->message());
+
+        self::assertSame('cURL error 28: Operation timed out after 30000 milliseconds', $response->message);
     }
 }

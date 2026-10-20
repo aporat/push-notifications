@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-20
+
+### Fixed
+- **A bare FCM 404 no longer reads as an unregistered token.** `Fcm\ErrorCode::outcomeForStatus()`
+  mapped `NOT_FOUND`, and any 404, to `Outcome::Unregistered`. A wrong project ID answers 404 to every
+  send, so a listener acting on that outcome would have deleted every token. Only the `UNREGISTERED`
+  error code, which FCM always attaches when it means the token, maps to `Unregistered`; a bare 404 is
+  now `Outcome::Failed`.
+- **`sendMany()` surfaces credential failures.** Guzzle's `EachPromise` drops rejections it has no
+  handler for, so a token that could not be minted or fetched came back as a generic retryable
+  `Unavailable` response per message instead of the documented exception. Both clients now fetch the
+  token once before the batch starts, so a failure throws with nothing sent, and a failure during the
+  batch is rethrown after it settles.
+- **Concurrent expired-token answers refresh once.** Every in-flight request that met
+  `ExpiredProviderToken` (APNs) or 401 (FCM) minted its own replacement, which on APNs trips
+  `TooManyProviderTokenUpdates`. New `refreshIfStale()` on both providers replaces the token only when
+  the rejected one is still current; later rejections of the same token reuse the replacement.
+- **`refresh()` adopts a newer cached token.** With a shared PSR-6 pool, every worker whose token
+  expired minted a new one and overwrote the pool. `refresh()` now takes a token another worker has
+  already written, when it is newer than its own, and mints only otherwise.
+- Connection-failure messages on a `Response` no longer carry the request URL, which for APNs holds
+  the device token and behind a proxy may hold its credentials (`Support\Http::describeFailure()`).
+- `Pem::load()` no longer echoes part of a malformed value in its exception, since a key with a
+  broken header is still key material.
+
+## [0.1.0] - 2026-10-20
+
 ### Added
 - `Apns\Client`: token-based pushes to Apple Push Notification service over one persistent
   HTTP/2 connection, with the provider token minted by `Apns\ProviderToken` (ES256 through

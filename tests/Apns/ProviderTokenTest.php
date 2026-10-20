@@ -111,4 +111,58 @@ final class ProviderTokenTest extends TestCase
 
         new Credentials('', 'KEY', Keys::ec());
     }
+
+    public function test_refresh_if_stale_refreshes_only_for_the_current_token(): void
+    {
+        $clock = new FrozenClock(1700000000);
+        $provider = new ProviderToken($this->credentials(), $clock);
+
+        $first = $provider->get();
+        $clock->advance(1);
+        $second = $provider->refreshIfStale($first);
+        self::assertNotSame($first, $second);
+
+        // A late rejection of the already-replaced token changes nothing.
+        $clock->advance(1);
+        self::assertSame($second, $provider->refreshIfStale($first));
+        self::assertSame(1700000001, $provider->issuedAt());
+
+        // Rejecting the current token does refresh.
+        self::assertNotSame($second, $provider->refreshIfStale($second));
+        self::assertSame(1700000002, $provider->issuedAt());
+    }
+
+    public function test_refresh_adopts_a_newer_token_from_the_shared_cache(): void
+    {
+        $clock = new FrozenClock(1700000000);
+        $pool = new ArrayCachePool;
+        $a = new ProviderToken($this->credentials(), $clock, $pool);
+        $b = new ProviderToken($this->credentials(), $clock, $pool);
+
+        $first = $a->get();
+        self::assertSame($first, $b->get());
+
+        $clock->advance(60);
+        $second = $a->refresh();
+        self::assertNotSame($first, $second);
+
+        // B's token was rejected too, but A already replaced it in the cache.
+        $clock->advance(1);
+        self::assertSame($second, $b->refresh());
+        self::assertSame(1700000060, $b->issuedAt());
+        self::assertSame(2, $pool->saves);
+    }
+
+    public function test_refresh_mints_when_the_cache_holds_only_its_own_token(): void
+    {
+        $clock = new FrozenClock(1700000000);
+        $pool = new ArrayCachePool;
+        $provider = new ProviderToken($this->credentials(), $clock, $pool);
+
+        $first = $provider->get();
+        $clock->advance(1);
+
+        self::assertNotSame($first, $provider->refresh());
+        self::assertSame(2, $pool->saves);
+    }
 }

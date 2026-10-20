@@ -78,8 +78,11 @@ final class ProviderToken
     }
 
     /**
-     * Mint a new token now, regardless of the current one's age. Use after
-     * APNs answers ExpiredProviderToken.
+     * Replace the current token. Use after APNs answers ExpiredProviderToken.
+     *
+     * Another worker sharing the cache may already have replaced it; that
+     * token is adopted rather than minting one more, so a fleet refreshes
+     * once per key, not once per process.
      *
      * @throws ConfigurationException
      */
@@ -87,6 +90,39 @@ final class ProviderToken
     {
         $now = $this->clock->now()->getTimestamp();
 
+        return $this->fromCache($now, newerThan: $this->issuedAt) ?? $this->mint($now);
+    }
+
+    /**
+     * Replace the token only if the rejected one is still the current one.
+     * With many requests in flight, the first rejection refreshes and the
+     * rest reuse its result, instead of each minting a token and tripping
+     * TooManyProviderTokenUpdates.
+     *
+     * @throws ConfigurationException
+     */
+    public function refreshIfStale(string $rejected): string
+    {
+        if ($this->token !== null && $this->token !== $rejected) {
+            return $this->token;
+        }
+
+        return $this->refresh();
+    }
+
+    /**
+     * When the token was issued, in seconds since the epoch; 0 before first use.
+     */
+    public function issuedAt(): int
+    {
+        return $this->issuedAt;
+    }
+
+    /**
+     * @throws ConfigurationException
+     */
+    private function mint(int $now): string
+    {
         $token = Jwt::es256(
             ['kid' => $this->credentials->keyId],
             ['iss' => $this->credentials->teamId, 'iat' => $now],
@@ -100,20 +136,15 @@ final class ProviderToken
         return $token;
     }
 
-    /**
-     * When the token was issued, in seconds since the epoch; 0 before first use.
-     */
-    public function issuedAt(): int
-    {
-        return $this->issuedAt;
-    }
-
     private function cacheKey(): string
     {
         return 'apns_provider_token_'.$this->credentials->fingerprint();
     }
 
-    private function fromCache(int $now): ?string
+    /**
+     * A fresh token from the shared cache, issued after $newerThan.
+     */
+    private function fromCache(int $now, int $newerThan = -1): ?string
     {
         if ($this->cache === null) {
             return null;
@@ -131,7 +162,7 @@ final class ProviderToken
             return null;
         }
 
-        if ($now - $value['issued_at'] >= $this->refreshAfter) {
+        if ($value['issued_at'] <= $newerThan || $now - $value['issued_at'] >= $this->refreshAfter) {
             return null;
         }
 

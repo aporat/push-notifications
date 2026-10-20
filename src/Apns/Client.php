@@ -132,8 +132,14 @@ final class Client implements Sender
             $accepted[$key]->validate();
         }
 
+        // One token for the whole batch, fetched before anything is sent,
+        // so a credential problem throws here instead of after a partial send.
+        $this->token->get();
+
         /** @var array<array-key, Response> $results */
         $results = [];
+
+        $failure = null;
 
         $promises = (function () use ($accepted) {
             foreach ($accepted as $key => $message) {
@@ -146,7 +152,17 @@ final class Client implements Sender
             'fulfilled' => function (Response $response, int|string $key) use (&$results): void {
                 $results[$key] = $response;
             },
+            // Without this, EachPromise drops rejections on the floor and
+            // an auth or configuration failure mid-batch would surface as
+            // a generic transport failure, or not at all.
+            'rejected' => function (Throwable $reason) use (&$failure): void {
+                $failure ??= $reason;
+            },
         ]))->promise()->wait();
+
+        if ($failure !== null) {
+            throw $failure;
+        }
 
         $ordered = [];
 
@@ -163,18 +179,19 @@ final class Client implements Sender
     private function sendAsync(Message $message, bool $retried = false): PromiseInterface
     {
         try {
-            $request = $this->request($message, $this->token->get());
+            $providerToken = $this->token->get();
+            $request = $this->request($message, $providerToken);
         } catch (Throwable $e) {
             return Create::rejectionFor($e);
         }
 
         return $this->http->sendAsync($request)->then(
-            function (ResponseInterface $response) use ($message, $retried): PromiseInterface|Response {
+            function (ResponseInterface $response) use ($message, $retried, $providerToken): PromiseInterface|Response {
                 $parsed = $this->parse($message, $response);
 
                 if (! $retried && $parsed->reason === Reason::ExpiredProviderToken->value) {
                     $this->logger->info('APNs reported an expired provider token; minting a new one and retrying once.');
-                    $this->token->refresh();
+                    $this->token->refreshIfStale($providerToken);
 
                     return $this->sendAsync($message, true);
                 }
@@ -193,7 +210,7 @@ final class Client implements Sender
                     return $parsed;
                 }
 
-                $failure = Response::transportFailure(Platform::Apns, $message->target(), $reason->getMessage());
+                $failure = Response::transportFailure(Platform::Apns, $message->target(), Http::describeFailure($reason));
                 $this->log($failure);
 
                 return $failure;

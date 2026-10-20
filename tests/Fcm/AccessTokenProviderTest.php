@@ -160,4 +160,38 @@ final class AccessTokenProviderTest extends TestCase
 
         ServiceAccount::fromJson('{');
     }
+
+    public function test_refresh_if_stale_exchanges_only_for_the_current_token(): void
+    {
+        $http = new MockHttp;
+        $http->queue(200, ['access_token' => 'one', 'expires_in' => 3600]);
+        $http->queue(200, ['access_token' => 'two', 'expires_in' => 3600]);
+        $http->queue(200, ['access_token' => 'three', 'expires_in' => 3600]);
+        $provider = new AccessTokenProvider($this->account(), $http->client, new FrozenClock(1700000000));
+
+        self::assertSame('one', $provider->get());
+        self::assertSame('two', $provider->refreshIfStale('one'));
+        self::assertSame('two', $provider->refreshIfStale('one'));
+        self::assertSame('three', $provider->refreshIfStale('two'));
+        self::assertSame(3, $http->count());
+    }
+
+    public function test_refresh_adopts_a_newer_token_from_the_shared_cache(): void
+    {
+        $http = new MockHttp;
+        $http->queue(200, ['access_token' => 'one', 'expires_in' => 3600]);
+        $http->queue(200, ['access_token' => 'two', 'expires_in' => 3600]);
+        $clock = new FrozenClock(1700000000);
+        $pool = new ArrayCachePool;
+        $a = new AccessTokenProvider($this->account(), $http->client, $clock, $pool);
+        $b = new AccessTokenProvider($this->account(), $http->client, $clock, $pool);
+
+        self::assertSame('one', $a->get());
+        self::assertSame('one', $b->get());
+
+        $clock->advance(60);
+        self::assertSame('two', $a->refresh());
+        self::assertSame('two', $b->refresh());
+        self::assertSame(2, $http->count());
+    }
 }
