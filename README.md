@@ -6,7 +6,7 @@ A PHP client for Apple Push Notification service (APNs) and Firebase Cloud Messa
 [![Downloads](https://img.shields.io/packagist/dt/aporat/push-notifications.svg?style=flat-square&logo=composer)](https://packagist.org/packages/aporat/push-notifications)
 [![codecov](https://codecov.io/github/aporat/push-notifications/graph/badge.svg)](https://codecov.io/github/aporat/push-notifications)
 ![GitHub Actions](https://img.shields.io/github/actions/workflow/status/aporat/push-notifications/ci.yml?style=flat-square)
-[![License](https://img.shields.io/packagist/l/aporat/push-notifications.svg?style=flat-square)](https://github.com/aporat/push-notifications/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/aporat/push-notifications?style=flat-square)](https://github.com/aporat/push-notifications/blob/main/LICENSE)
 
 Framework-free. The Laravel integration lives in [aporat/laravel-push-notifications](https://github.com/aporat/laravel-push-notifications).
 
